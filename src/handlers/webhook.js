@@ -14,21 +14,18 @@ export async function receiveWebhook(request, env, ctx) {
     return new Response('Bad Request', { status: 400 });
   }
 
-  // Deduplicate by update_id to prevent double processing
   const updateId = body?.update_id;
   if (updateId) {
     if (processedUpdates.has(updateId)) {
       return new Response('OK', { status: 200 });
     }
     processedUpdates.add(updateId);
-    // Keep set small
     if (processedUpdates.size > 100) {
       const first = processedUpdates.values().next().value;
       processedUpdates.delete(first);
     }
   }
 
-  // Use ctx.waitUntil so Cloudflare keeps the worker alive for background processing
   ctx.waitUntil(processUpdate(body, env));
 
   return new Response('OK', { status: 200 });
@@ -36,7 +33,6 @@ export async function receiveWebhook(request, env, ctx) {
 
 async function processUpdate(body, env) {
   try {
-    // Handle callback queries (button presses)
     if (body.callback_query) {
       await handleCallbackQuery(body.callback_query, env);
       return;
@@ -48,10 +44,7 @@ async function processUpdate(body, env) {
     const chatId = message.chat.id.toString();
     const messageType = getMessageType(message);
 
-    // Ensure user exists
-    await upsertUser(env, chatId);
-
-    // Extract raw input
+    // Parallelize: upsertUser + saveEpisode + getUserRules simultaneously
     let rawInput = '';
     let inputType = messageType;
     let fileId = null;
@@ -66,7 +59,6 @@ async function processUpdate(body, env) {
       rawInput = fileId;
       inputType = 'voice';
     } else if (messageType === 'image') {
-      // Telegram sends array of photos, last = highest res
       const photos = message.photo;
       fileId = photos[photos.length - 1]?.file_id;
       rawInput = fileId;
@@ -78,15 +70,14 @@ async function processUpdate(body, env) {
       return;
     }
 
-    // Save episode
-    await saveEpisode(env, {
-      user_phone: chatId,
-      raw_input: rawInput,
-      input_type: inputType,
-      transcribed_text: null
-    });
+    // Run all independent setup calls in parallel
+    const [, , userRules] = await Promise.all([
+      upsertUser(env, chatId),
+      saveEpisode(env, { user_phone: chatId, raw_input: rawInput, input_type: inputType, transcribed_text: null }),
+      getUserRules(env, chatId)
+    ]);
 
-    // Handle voice transcription
+    // Handle media (must be sequential - need the buffer)
     if (inputType === 'voice' && fileId) {
       try {
         const mediaBuffer = await downloadTelegramFile(env, fileId);
@@ -98,7 +89,6 @@ async function processUpdate(body, env) {
       }
     }
 
-    // Handle image/document text extraction
     if ((inputType === 'image' || inputType === 'document') && fileId) {
       try {
         const mediaBuffer = await downloadTelegramFile(env, fileId);
@@ -115,11 +105,10 @@ async function processUpdate(body, env) {
       return;
     }
 
-    // Get user rules and send to LLM
-    const userRules = await getUserRules(env, chatId);
+    // Get LLM intent
     const intentData = await getLLMResponse(env, rawInput, userRules);
 
-    // Execute intent
+    // Execute intent — reply fast, persist in background
     await executeIntent(env, chatId, intentData);
 
   } catch (err) {
@@ -145,20 +134,26 @@ async function handleCallbackQuery(callbackQuery, env) {
 
     if (data.startsWith('done_')) {
       const reminderId = data.replace('done_', '');
-      await markReminderDone(env, reminderId);
-      await sendTextMessage(env, chatId, 'Marked as done!');
+      await Promise.all([
+        markReminderDone(env, reminderId),
+        sendTextMessage(env, chatId, 'Marked as done!')
+      ]);
     } else if (data.startsWith('snooze1h_')) {
       const reminderId = data.replace('snooze1h_', '');
       const newTime = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-      await snoozeReminder(env, reminderId, newTime);
-      await sendTextMessage(env, chatId, 'Snoozed for 1 hour.');
+      await Promise.all([
+        snoozeReminder(env, reminderId, newTime),
+        sendTextMessage(env, chatId, 'Snoozed for 1 hour.')
+      ]);
     } else if (data.startsWith('snoozetomorrow_')) {
       const reminderId = data.replace('snoozetomorrow_', '');
       const tomorrow = new Date();
       tomorrow.setDate(tomorrow.getDate() + 1);
       tomorrow.setHours(9, 0, 0, 0);
-      await snoozeReminder(env, reminderId, tomorrow.toISOString());
-      await sendTextMessage(env, chatId, 'Snoozed until tomorrow at 9 AM.');
+      await Promise.all([
+        snoozeReminder(env, reminderId, tomorrow.toISOString()),
+        sendTextMessage(env, chatId, 'Snoozed until tomorrow at 9 AM.')
+      ]);
     }
   } catch (err) {
     console.error('handleCallbackQuery error:', err);
@@ -214,31 +209,43 @@ async function handleSaveNote(env, chatId, intentData) {
     return;
   }
 
-  const embedding = await generateEmbedding(env, content);
-
-  await saveNote(env, {
-    user_phone: chatId,
-    content,
-    embedding,
-    tags: intentData.tags || [],
-    people: intentData.people || [],
-    projects: intentData.projects || [],
-    topics: intentData.topics || []
-  });
-
-  await upsertEntities(env, chatId, {
-    people: intentData.people || [],
-    projects: intentData.projects || [],
-    topics: intentData.topics || []
-  });
-
+  // Reply immediately, persist in background
   await sendTextMessage(env, chatId, intentData.reply_message || 'Note saved!');
+
+  // Background: embedding + DB write
+  const embedding = await generateEmbedding(env, content);
+  await Promise.all([
+    saveNote(env, {
+      user_phone: chatId,
+      content,
+      embedding,
+      tags: intentData.tags || [],
+      people: intentData.people || [],
+      projects: intentData.projects || [],
+      topics: intentData.topics || []
+    }),
+    upsertEntities(env, chatId, {
+      people: intentData.people || [],
+      projects: intentData.projects || [],
+      topics: intentData.topics || []
+    })
+  ]);
 }
 
 async function handleSetReminder(env, chatId, intentData) {
   const content = intentData.note_content || intentData.reminder_message || '';
-  let noteId = null;
+  const dueAt = intentData.reminder_time_iso;
 
+  if (!dueAt) {
+    await sendTextMessage(env, chatId, "Couldn't parse the reminder time. Please specify when.");
+    return;
+  }
+
+  // Reply immediately
+  const formattedTime = formatReminderTime(dueAt);
+  await sendTextMessage(env, chatId, intentData.reply_message || `Reminder set for ${formattedTime}.`);
+
+  // Background: save note + reminder
   if (content) {
     const embedding = await generateEmbedding(env, content);
     const note = await saveNote(env, {
@@ -251,30 +258,27 @@ async function handleSetReminder(env, chatId, intentData) {
       topics: intentData.topics || []
     });
 
-    await upsertEntities(env, chatId, {
-      people: intentData.people || [],
-      projects: intentData.projects || [],
-      topics: intentData.topics || []
+    await Promise.all([
+      upsertEntities(env, chatId, {
+        people: intentData.people || [],
+        projects: intentData.projects || [],
+        topics: intentData.topics || []
+      }),
+      saveReminder(env, {
+        user_phone: chatId,
+        note_id: note?.id || null,
+        message: intentData.reminder_message || content,
+        due_at: dueAt
+      })
+    ]);
+  } else {
+    await saveReminder(env, {
+      user_phone: chatId,
+      note_id: null,
+      message: intentData.reminder_message || '',
+      due_at: dueAt
     });
-
-    noteId = note?.id || null;
   }
-
-  const dueAt = intentData.reminder_time_iso;
-  if (!dueAt) {
-    await sendTextMessage(env, chatId, "Couldn't parse the reminder time. Please specify when.");
-    return;
-  }
-
-  await saveReminder(env, {
-    user_phone: chatId,
-    note_id: noteId,
-    message: intentData.reminder_message || content,
-    due_at: dueAt
-  });
-
-  const formattedTime = formatReminderTime(dueAt);
-  await sendTextMessage(env, chatId, intentData.reply_message || `Reminder set for ${formattedTime}.`);
 }
 
 async function handleSearchNotes(env, chatId, intentData) {
@@ -284,7 +288,12 @@ async function handleSearchNotes(env, chatId, intentData) {
     return;
   }
 
-  const queryEmbedding = await generateEmbedding(env, query);
+  // Run embedding + text search in parallel
+  const [queryEmbedding, textResults] = await Promise.all([
+    generateEmbedding(env, query),
+    searchNotes(env, chatId, query, null)
+  ]);
+
   const results = await searchNotes(env, chatId, query, queryEmbedding);
 
   if (!results || results.length === 0) {
@@ -318,6 +327,10 @@ async function handleShowList(env, chatId, intentData) {
 }
 
 async function handleMarkDone(env, chatId, intentData) {
+  // Reply immediately
+  await sendTextMessage(env, chatId, intentData.reply_message || 'Marked as done!');
+
+  // Background: find and mark
   const query = intentData.search_query || intentData.note_content || '';
   if (query) {
     const queryEmbedding = await generateEmbedding(env, query);
@@ -326,7 +339,6 @@ async function handleMarkDone(env, chatId, intentData) {
       await markNoteDone(env, results[0].id);
     }
   }
-  await sendTextMessage(env, chatId, intentData.reply_message || 'Marked as done!');
 }
 
 async function handleSnooze(env, chatId, intentData) {
@@ -342,10 +354,12 @@ async function handleSnooze(env, chatId, intentData) {
     newTime = new Date(Date.now() + 60 * 60 * 1000).toISOString();
   }
 
-  await snoozeLatestReminder(env, chatId, newTime);
-
   const msg = duration === 'tomorrow' ? 'Snoozed until tomorrow at 9 AM.' : 'Snoozed for 1 hour.';
-  await sendTextMessage(env, chatId, intentData.reply_message || msg);
+
+  await Promise.all([
+    snoozeLatestReminder(env, chatId, newTime),
+    sendTextMessage(env, chatId, intentData.reply_message || msg)
+  ]);
 }
 
 async function handleUpdateRule(env, chatId, intentData) {
@@ -354,8 +368,10 @@ async function handleUpdateRule(env, chatId, intentData) {
     await sendTextMessage(env, chatId, 'No rule text found.');
     return;
   }
-  await saveUserRule(env, chatId, ruleText);
-  await sendTextMessage(env, chatId, intentData.reply_message || 'Rule saved!');
+  await Promise.all([
+    saveUserRule(env, chatId, ruleText),
+    sendTextMessage(env, chatId, intentData.reply_message || 'Rule saved!')
+  ]);
 }
 
 async function handleQueryEntity(env, chatId, intentData) {
