@@ -4,7 +4,7 @@ import { generateEmbedding } from '../services/embeddings.js';
 import { sendTextMessage, sendInteractiveButtons, answerCallbackQuery, downloadTelegramFile } from '../services/telegram.js';
 import { formatReminderTime } from '../utils/time.js';
 
-export async function receiveWebhook(request, env) {
+export async function receiveWebhook(request, env, ctx) {
   let body;
   try {
     body = await request.json();
@@ -12,9 +12,8 @@ export async function receiveWebhook(request, env) {
     return new Response('Bad Request', { status: 400 });
   }
 
-  // Process in background, respond immediately (Telegram requires fast 200)
-  const processing = processUpdate(body, env);
-  processing.catch(err => console.error('Background processing error:', err));
+  // Use ctx.waitUntil so Cloudflare keeps the worker alive for background processing
+  ctx.waitUntil(processUpdate(body, env));
 
   return new Response('OK', { status: 200 });
 }

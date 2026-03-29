@@ -11,7 +11,7 @@ export default {
     try {
       // Telegram sends all updates as POST to /webhook
       if (path === '/webhook' && method === 'POST') {
-        return receiveWebhook(request, env);
+        return receiveWebhook(request, env, ctx);
       }
 
       // One-time setup: call this URL in browser to register webhook with Telegram
