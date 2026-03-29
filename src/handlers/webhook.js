@@ -1,8 +1,9 @@
-import { saveEpisode, getUserRules, saveNote, upsertEntities, saveReminder, searchNotes, listNotes, markNoteDone, markReminderDone, snoozeReminder, snoozeLatestReminder, saveUserRule, getEntity, getNotesByEntity, upsertUser, updateNoteContent, deleteNote, deleteAllNotes } from '../services/supabase.js';
+import { saveEpisode, updateEpisode, getUserRules, saveNote, upsertEntities, saveReminder, searchNotes, listNotes, markNoteDone, markReminderDone, snoozeReminder, snoozeLatestReminder, saveUserRule, getEntity, getNotesByEntity, upsertUser, updateNoteContent, deleteNote, deleteAllNotes } from '../services/supabase.js';
 import { transcribeAudio, extractTextFromMedia, getLLMResponse, summarizeEntity } from '../services/groq.js';
 import { generateEmbedding } from '../services/embeddings.js';
 import { sendTextMessage, sendInteractiveButtons, answerCallbackQuery, downloadTelegramFile } from '../services/telegram.js';
-import { formatReminderTime } from '../utils/time.js';
+import { formatReminderTime, parseSnoozeDuration, getTomorrowAt9AM, getOneHourFromNow } from '../utils/time.js';
+import { parseIntent } from '../utils/intent.js';
 
 const processedUpdates = new Set();
 
@@ -71,7 +72,7 @@ async function processUpdate(body, env) {
     }
 
     // Run all independent setup calls in parallel
-    const [, , userRules] = await Promise.all([
+    const [, episode, userRules] = await Promise.all([
       upsertUser(env, chatId),
       saveEpisode(env, { user_phone: chatId, raw_input: rawInput, input_type: inputType, transcribed_text: null }),
       getUserRules(env, chatId)
@@ -82,6 +83,7 @@ async function processUpdate(body, env) {
       try {
         const mediaBuffer = await downloadTelegramFile(env, fileId);
         rawInput = await transcribeAudio(env, mediaBuffer);
+        if (episode?.id) updateEpisode(env, episode.id, rawInput).catch(console.error);
       } catch (err) {
         console.error('Audio transcription error:', err);
         await sendTextMessage(env, chatId, "Couldn't process your voice message. Please try again.");
@@ -93,6 +95,7 @@ async function processUpdate(body, env) {
       try {
         const mediaBuffer = await downloadTelegramFile(env, fileId);
         rawInput = await extractTextFromMedia(env, mediaBuffer, inputType);
+        if (episode?.id) updateEpisode(env, episode.id, rawInput).catch(console.error);
       } catch (err) {
         console.error('Media extraction error:', err);
         await sendTextMessage(env, chatId, "Couldn't process your file. Please try again.");
@@ -105,8 +108,20 @@ async function processUpdate(body, env) {
       return;
     }
 
-    // Get LLM intent
-    const intentData = await getLLMResponse(env, rawInput, userRules);
+    // Handle Telegram bot commands directly
+    if (messageType === 'text' && rawInput.startsWith('/')) {
+      if (rawInput === '/start') {
+        await sendTextMessage(env, chatId, `*Welcome to Chief!*\n\nI'm your personal AI assistant. Here's what I can do:\n\n*Notes*\n- "Save a note: meeting with John at 3pm"\n- "Show all my notes"\n- "Find my notes about the project"\n\n*Reminders*\n- "Remind me to call Sarah tomorrow at 9am"\n- "Snooze my reminder to tomorrow"\n\n*Edit & Delete*\n- "Edit my note about John, change it to..."\n- "Delete my note about the meeting"\n\n*People & Projects*\n- "What do I know about John?"\n\n*Voice & Images*\n- Send a voice message and I'll transcribe it\n- Send an image or PDF and I'll extract the text\n\n*Preferences*\n- "Always reply in bullet points" (custom rules)\n\nType /help anytime to see this again.`);
+        return;
+      }
+      if (rawInput === '/help') {
+        await sendTextMessage(env, chatId, `*Chief – Quick Reference*\n\n📝 *Save* – just tell me what to save\n🔔 *Remind* – "remind me to... at [time]"\n🔍 *Search* – "find my notes about..."\n📋 *List* – "show all notes" / "show today's notes"\n✅ *Done* – "mark [note] as done"\n✏️ *Edit* – "edit my note about [topic]"\n🗑 *Delete* – "delete my note about [topic]"\n👤 *Query* – "what do I know about [person/project]?"\n⏰ *Snooze* – "snooze my reminder" / "snooze to tomorrow"\n⚙️ *Rules* – "always reply in Hindi"`);
+        return;
+      }
+    }
+
+    // Parse and validate LLM intent
+    const intentData = parseIntent(await getLLMResponse(env, rawInput, userRules));
 
     // Execute intent — reply fast, persist in background
     await executeIntent(env, chatId, intentData);
@@ -140,18 +155,14 @@ async function handleCallbackQuery(callbackQuery, env) {
       ]);
     } else if (data.startsWith('snooze1h_')) {
       const reminderId = data.replace('snooze1h_', '');
-      const newTime = new Date(Date.now() + 60 * 60 * 1000).toISOString();
       await Promise.all([
-        snoozeReminder(env, reminderId, newTime),
+        snoozeReminder(env, reminderId, getOneHourFromNow()),
         sendTextMessage(env, chatId, 'Snoozed for 1 hour.')
       ]);
     } else if (data.startsWith('snoozetomorrow_')) {
       const reminderId = data.replace('snoozetomorrow_', '');
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      tomorrow.setHours(9, 0, 0, 0);
       await Promise.all([
-        snoozeReminder(env, reminderId, tomorrow.toISOString()),
+        snoozeReminder(env, reminderId, getTomorrowAt9AM()),
         sendTextMessage(env, chatId, 'Snoozed until tomorrow at 9 AM.')
       ]);
     }
@@ -294,12 +305,7 @@ async function handleSearchNotes(env, chatId, intentData) {
     return;
   }
 
-  // Run embedding + text search in parallel
-  const [queryEmbedding, textResults] = await Promise.all([
-    generateEmbedding(env, query),
-    searchNotes(env, chatId, query, null)
-  ]);
-
+  const queryEmbedding = await generateEmbedding(env, query);
   const results = await searchNotes(env, chatId, query, queryEmbedding);
 
   if (!results || results.length === 0) {
@@ -349,17 +355,7 @@ async function handleMarkDone(env, chatId, intentData) {
 
 async function handleSnooze(env, chatId, intentData) {
   const duration = intentData.snooze_duration || '1h';
-  let newTime;
-
-  if (duration === 'tomorrow') {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    tomorrow.setHours(9, 0, 0, 0);
-    newTime = tomorrow.toISOString();
-  } else {
-    newTime = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-  }
-
+  const newTime = parseSnoozeDuration(duration);
   const msg = duration === 'tomorrow' ? 'Snoozed until tomorrow at 9 AM.' : 'Snoozed for 1 hour.';
 
   await Promise.all([
@@ -389,10 +385,7 @@ async function handleEditNote(env, chatId, intentData) {
     return;
   }
 
-  // Reply immediately
-  await sendTextMessage(env, chatId, intentData.reply_message || 'Note updated!');
-
-  // Background: find note, generate embedding, update
+  // Search first — don't send false success
   const queryEmbedding = await generateEmbedding(env, searchQuery);
   const results = await searchNotes(env, chatId, searchQuery, queryEmbedding);
 
@@ -401,8 +394,12 @@ async function handleEditNote(env, chatId, intentData) {
     return;
   }
 
+  // Found — reply and update in parallel
   const embedding = await generateEmbedding(env, newContent);
-  await updateNoteContent(env, results[0].id, newContent, embedding);
+  await Promise.all([
+    sendTextMessage(env, chatId, intentData.reply_message || 'Note updated!'),
+    updateNoteContent(env, results[0].id, newContent, embedding)
+  ]);
 }
 
 async function handleDeleteNote(env, chatId, intentData) {
@@ -422,16 +419,20 @@ async function handleDeleteNote(env, chatId, intentData) {
     return;
   }
 
-  // Reply immediately
-  await sendTextMessage(env, chatId, intentData.reply_message || 'Note deleted.');
-
-  // Background: find and soft-delete
+  // Search first — don't send false success
   const queryEmbedding = await generateEmbedding(env, searchQuery);
   const results = await searchNotes(env, chatId, searchQuery, queryEmbedding);
 
-  if (results && results.length > 0) {
-    await deleteNote(env, results[0].id);
+  if (!results || results.length === 0) {
+    await sendTextMessage(env, chatId, `Couldn't find a note matching "${searchQuery}".`);
+    return;
   }
+
+  // Found — reply and soft-delete in parallel
+  await Promise.all([
+    sendTextMessage(env, chatId, intentData.reply_message || 'Note deleted.'),
+    deleteNote(env, results[0].id)
+  ]);
 }
 
 async function handleQueryEntity(env, chatId, intentData) {

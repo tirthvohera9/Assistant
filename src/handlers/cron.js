@@ -29,11 +29,13 @@ export async function sendBriefings(request, env) {
   try {
     const users = await getAllUsers(env);
 
-    for (const user of users) {
+    await Promise.all(users.map(async user => {
       try {
-        const todaysReminders = await getUserRemindersToday(env, user.phone);
-        const activeNotes = await getActiveNotesToday(env, user.phone);
-        const topEntities = await getTopEntities(env, user.phone);
+        const [todaysReminders, activeNotes, topEntities] = await Promise.all([
+          getUserRemindersToday(env, user.phone),
+          getActiveNotesToday(env, user.phone),
+          getTopEntities(env, user.phone)
+        ]);
 
         const briefingText = await composeBriefing(env, {
           reminders: todaysReminders,
@@ -45,7 +47,7 @@ export async function sendBriefings(request, env) {
       } catch (err) {
         console.error(`Failed to send briefing to ${user.phone}:`, err);
       }
-    }
+    }));
 
     return new Response(JSON.stringify({ sent: users.length }), {
       status: 200,

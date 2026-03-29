@@ -46,6 +46,12 @@ export async function upsertUser(env, phone) {
   }
 }
 
+export async function updateEpisode(env, episodeId, transcribedText) {
+  await supabaseRequest(env, 'PATCH', `/episodes?id=eq.${episodeId}`, {
+    transcribed_text: transcribedText
+  });
+}
+
 export async function saveEpisode(env, data) {
   try {
     const result = await supabaseRequest(env, 'POST', '/episodes', data);
@@ -95,35 +101,34 @@ export async function upsertEntities(env, userPhone, { people = [], projects = [
     ...people.map(name => ({ entity_type: 'person', name })),
     ...projects.map(name => ({ entity_type: 'project', name })),
     ...topics.map(name => ({ entity_type: 'topic', name }))
-  ];
+  ].filter(e => e.name);
 
-  for (const entity of allEntities) {
-    if (!entity.name) continue;
+  const now = new Date().toISOString();
+
+  await Promise.all(allEntities.map(async entity => {
     try {
       await supabaseRequest(env, 'POST', '/entities', {
         user_phone: userPhone,
         entity_type: entity.entity_type,
         name: entity.name,
-        last_mentioned: new Date().toISOString(),
+        last_mentioned: now,
         open_items: 1,
         metadata: {}
       });
     } catch {
-      // Try update if insert fails (conflict on unique constraint)
+      // Conflict — update last_mentioned instead
       try {
         await supabaseRequest(
           env,
           'PATCH',
           `/entities?user_phone=eq.${encodeURIComponent(userPhone)}&entity_type=eq.${entity.entity_type}&name=eq.${encodeURIComponent(entity.name)}`,
-          {
-            last_mentioned: new Date().toISOString()
-          }
+          { last_mentioned: now }
         );
       } catch (updateErr) {
         console.error('upsertEntities update error:', updateErr);
       }
     }
-  }
+  }));
 }
 
 export async function saveReminder(env, data) {
