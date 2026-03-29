@@ -1,4 +1,4 @@
-import { saveEpisode, updateEpisode, getUserRules, saveNote, upsertEntities, saveReminder, searchNotes, listNotes, markNoteDone, markReminderDone, snoozeReminder, snoozeLatestReminder, saveUserRule, getEntity, getNotesByEntity, upsertUser, updateNoteContent, deleteNote, deleteAllNotes } from '../services/supabase.js';
+import { saveEpisode, updateEpisode, getUserRules, saveNote, upsertEntities, saveReminder, searchNotes, searchReminders, listNotes, markNoteDone, markReminderDone, snoozeReminder, snoozeLatestReminder, cancelReminder, saveUserRule, getEntity, getNotesByEntity, upsertUser, updateNoteContent, deleteNote, deleteAllNotes } from '../services/supabase.js';
 import { transcribeAudio, extractTextFromMedia, getLLMResponse, summarizeEntity } from '../services/groq.js';
 import { generateEmbedding } from '../services/embeddings.js';
 import { sendTextMessage, sendInteractiveButtons, answerCallbackQuery, downloadTelegramFile } from '../services/telegram.js';
@@ -201,6 +201,9 @@ async function executeIntent(env, chatId, intentData) {
       case 'delete_note':
         await handleDeleteNote(env, chatId, intentData);
         break;
+      case 'delete_reminder':
+        await handleDeleteReminder(env, chatId, intentData);
+        break;
       case 'update_rule':
         await handleUpdateRule(env, chatId, intentData);
         break;
@@ -355,13 +358,27 @@ async function handleMarkDone(env, chatId, intentData) {
 
 async function handleSnooze(env, chatId, intentData) {
   const duration = intentData.snooze_duration || '1h';
+  const searchQuery = intentData.snooze_search_query || '';
   const newTime = parseSnoozeDuration(duration);
   const msg = duration === 'tomorrow' ? 'Snoozed until tomorrow at 9 AM.' : 'Snoozed for 1 hour.';
 
-  await Promise.all([
-    snoozeLatestReminder(env, chatId, newTime),
-    sendTextMessage(env, chatId, intentData.reply_message || msg)
-  ]);
+  if (searchQuery) {
+    const results = await searchReminders(env, chatId, searchQuery);
+    if (!results || results.length === 0) {
+      await sendTextMessage(env, chatId, `Couldn't find a pending reminder matching "${searchQuery}".`);
+      return;
+    }
+    await Promise.all([
+      snoozeReminder(env, results[0].id, newTime),
+      sendTextMessage(env, chatId, intentData.reply_message || msg)
+    ]);
+  } else {
+    // No specific reminder mentioned — snooze the earliest pending one
+    await Promise.all([
+      snoozeLatestReminder(env, chatId, newTime),
+      sendTextMessage(env, chatId, intentData.reply_message || msg)
+    ]);
+  }
 }
 
 async function handleUpdateRule(env, chatId, intentData) {
@@ -432,6 +449,27 @@ async function handleDeleteNote(env, chatId, intentData) {
   await Promise.all([
     sendTextMessage(env, chatId, intentData.reply_message || 'Note deleted.'),
     deleteNote(env, results[0].id)
+  ]);
+}
+
+async function handleDeleteReminder(env, chatId, intentData) {
+  const searchQuery = intentData.edit_search_query || '';
+
+  if (!searchQuery) {
+    await sendTextMessage(env, chatId, 'Which reminder would you like to cancel?');
+    return;
+  }
+
+  const results = await searchReminders(env, chatId, searchQuery);
+
+  if (!results || results.length === 0) {
+    await sendTextMessage(env, chatId, `Couldn't find a pending reminder matching "${searchQuery}".`);
+    return;
+  }
+
+  await Promise.all([
+    sendTextMessage(env, chatId, intentData.reply_message || 'Reminder cancelled.'),
+    cancelReminder(env, results[0].id)
   ]);
 }
 

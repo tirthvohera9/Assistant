@@ -75,15 +75,16 @@ export async function getLLMResponse(env, userMessage, userRules) {
   const systemPrompt = `You are Chief, a personal AI assistant. Analyze the user message and return ONLY valid JSON.
 
 {
-  "intent": "save_note|set_reminder|search_notes|show_list|mark_done|edit_note|delete_note|snooze|update_rule|query_entity|answer_question|unclear",
+  "intent": "save_note|set_reminder|search_notes|show_list|mark_done|edit_note|delete_note|delete_reminder|snooze|update_rule|query_entity|answer_question|unclear",
   "note_content": "cleaned note text if saving or new content if editing",
-  "edit_search_query": "what to search for to find the note to edit or delete",
+  "edit_search_query": "what to search for to find the note/reminder to edit, delete, or cancel",
   "reminder_time_iso": "ISO8601 datetime if reminder, else null",
   "reminder_message": "reminder text if applicable",
-  "search_query": "query string if searching",
+  "search_query": "query string if searching notes",
   "entity_query": "person or project name if querying entity",
   "list_filter": "all|today|week|people|projects",
   "snooze_duration": "1h|tomorrow|null",
+  "snooze_search_query": "keywords to find the specific reminder to snooze, if mentioned",
   "rule_text": "rule to save if updating rule",
   "delete_all": false,
   "people": ["array of people mentioned"],

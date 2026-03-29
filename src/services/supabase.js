@@ -264,6 +264,30 @@ export async function deleteAllNotes(env, userPhone) {
   }
 }
 
+export async function searchReminders(env, userPhone, query) {
+  try {
+    const result = await supabaseRequest(
+      env,
+      'GET',
+      `/reminders?user_phone=eq.${encodeURIComponent(userPhone)}&status=eq.pending&message=ilike.*${encodeURIComponent(query)}*&order=due_at.asc&limit=5`
+    );
+    return result || [];
+  } catch (err) {
+    console.error('searchReminders error:', err);
+    return [];
+  }
+}
+
+export async function cancelReminder(env, reminderId) {
+  try {
+    await supabaseRequest(env, 'PATCH', `/reminders?id=eq.${reminderId}`, {
+      status: 'done'
+    });
+  } catch (err) {
+    console.error('cancelReminder error:', err);
+  }
+}
+
 export async function markReminderDone(env, reminderId) {
   try {
     await supabaseRequest(
