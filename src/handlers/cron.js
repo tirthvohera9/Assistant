@@ -1,5 +1,5 @@
 import { getDueReminders, updateReminderStatus, getAllUsers, getUserRemindersToday, getActiveNotesToday, getTopEntities } from '../services/supabase.js';
-import { sendTextMessage, sendInteractiveButtons } from '../services/whatsapp.js';
+import { sendTextMessage, sendInteractiveButtons } from '../services/telegram.js';
 import { composeBriefing } from '../services/groq.js';
 
 export async function checkReminders(request, env) {

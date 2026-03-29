@@ -1,5 +1,6 @@
-import { verifyWebhook, receiveWebhook } from './handlers/webhook.js';
+import { receiveWebhook } from './handlers/webhook.js';
 import { checkReminders, sendBriefings } from './handlers/cron.js';
+import { setWebhook } from './services/telegram.js';
 
 export default {
   async fetch(request, env, ctx) {
@@ -8,12 +9,19 @@ export default {
     const method = request.method;
 
     try {
-      if (path === '/webhook' && method === 'GET') {
-        return verifyWebhook(request, env);
-      }
-
+      // Telegram sends all updates as POST to /webhook
       if (path === '/webhook' && method === 'POST') {
         return receiveWebhook(request, env);
+      }
+
+      // One-time setup: call this URL in browser to register webhook with Telegram
+      if (path === '/setup' && method === 'GET') {
+        const workerUrl = `${url.protocol}//${url.host}`;
+        const result = await setWebhook(env, workerUrl);
+        return new Response(JSON.stringify(result), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
       }
 
       if (path === '/cron/reminders' && method === 'POST') {
@@ -22,6 +30,10 @@ export default {
 
       if (path === '/cron/briefing' && method === 'POST') {
         return sendBriefings(request, env);
+      }
+
+      if (path === '/' || path === '/webhook') {
+        return new Response('Chief is running.', { status: 200 });
       }
 
       return new Response('Not Found', { status: 404 });
