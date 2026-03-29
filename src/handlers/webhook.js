@@ -1,4 +1,4 @@
-import { saveEpisode, getUserRules, saveNote, upsertEntities, saveReminder, searchNotes, listNotes, markNoteDone, markReminderDone, snoozeReminder, snoozeLatestReminder, saveUserRule, getEntity, getNotesByEntity, upsertUser } from '../services/supabase.js';
+import { saveEpisode, getUserRules, saveNote, upsertEntities, saveReminder, searchNotes, listNotes, markNoteDone, markReminderDone, snoozeReminder, snoozeLatestReminder, saveUserRule, getEntity, getNotesByEntity, upsertUser, updateNoteContent, deleteNote, deleteAllNotes } from '../services/supabase.js';
 import { transcribeAudio, extractTextFromMedia, getLLMResponse, summarizeEntity } from '../services/groq.js';
 import { generateEmbedding } from '../services/embeddings.js';
 import { sendTextMessage, sendInteractiveButtons, answerCallbackQuery, downloadTelegramFile } from '../services/telegram.js';
@@ -183,6 +183,12 @@ async function executeIntent(env, chatId, intentData) {
         break;
       case 'snooze':
         await handleSnooze(env, chatId, intentData);
+        break;
+      case 'edit_note':
+        await handleEditNote(env, chatId, intentData);
+        break;
+      case 'delete_note':
+        await handleDeleteNote(env, chatId, intentData);
         break;
       case 'update_rule':
         await handleUpdateRule(env, chatId, intentData);
@@ -372,6 +378,60 @@ async function handleUpdateRule(env, chatId, intentData) {
     saveUserRule(env, chatId, ruleText),
     sendTextMessage(env, chatId, intentData.reply_message || 'Rule saved!')
   ]);
+}
+
+async function handleEditNote(env, chatId, intentData) {
+  const searchQuery = intentData.edit_search_query || intentData.note_content || '';
+  const newContent = intentData.note_content || '';
+
+  if (!searchQuery || !newContent) {
+    await sendTextMessage(env, chatId, 'Please specify which note to edit and the new content.');
+    return;
+  }
+
+  // Reply immediately
+  await sendTextMessage(env, chatId, intentData.reply_message || 'Note updated!');
+
+  // Background: find note, generate embedding, update
+  const queryEmbedding = await generateEmbedding(env, searchQuery);
+  const results = await searchNotes(env, chatId, searchQuery, queryEmbedding);
+
+  if (!results || results.length === 0) {
+    await sendTextMessage(env, chatId, `Couldn't find a note matching "${searchQuery}".`);
+    return;
+  }
+
+  const embedding = await generateEmbedding(env, newContent);
+  await updateNoteContent(env, results[0].id, newContent, embedding);
+}
+
+async function handleDeleteNote(env, chatId, intentData) {
+  const deleteAll = intentData.delete_all === true;
+  const searchQuery = intentData.edit_search_query || intentData.note_content || '';
+
+  if (deleteAll) {
+    await Promise.all([
+      deleteAllNotes(env, chatId),
+      sendTextMessage(env, chatId, intentData.reply_message || 'All notes deleted.')
+    ]);
+    return;
+  }
+
+  if (!searchQuery) {
+    await sendTextMessage(env, chatId, 'Please specify which note to delete.');
+    return;
+  }
+
+  // Reply immediately
+  await sendTextMessage(env, chatId, intentData.reply_message || 'Note deleted.');
+
+  // Background: find and soft-delete
+  const queryEmbedding = await generateEmbedding(env, searchQuery);
+  const results = await searchNotes(env, chatId, searchQuery, queryEmbedding);
+
+  if (results && results.length > 0) {
+    await deleteNote(env, results[0].id);
+  }
 }
 
 async function handleQueryEntity(env, chatId, intentData) {

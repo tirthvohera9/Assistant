@@ -222,6 +222,43 @@ export async function markNoteDone(env, noteId) {
   }
 }
 
+export async function updateNoteContent(env, noteId, newContent, embedding) {
+  try {
+    const payload = {
+      content: newContent,
+      updated_at: new Date().toISOString()
+    };
+    if (embedding) {
+      payload.embedding = JSON.stringify(embedding);
+    }
+    await supabaseRequest(env, 'PATCH', `/notes?id=eq.${noteId}`, payload);
+  } catch (err) {
+    console.error('updateNoteContent error:', err);
+  }
+}
+
+export async function deleteNote(env, noteId) {
+  try {
+    await supabaseRequest(env, 'PATCH', `/notes?id=eq.${noteId}`, {
+      status: 'archived',
+      updated_at: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('deleteNote error:', err);
+  }
+}
+
+export async function deleteAllNotes(env, userPhone) {
+  try {
+    await supabaseRequest(env, 'PATCH', `/notes?user_phone=eq.${encodeURIComponent(userPhone)}&status=eq.active`, {
+      status: 'archived',
+      updated_at: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('deleteAllNotes error:', err);
+  }
+}
+
 export async function markReminderDone(env, reminderId) {
   try {
     await supabaseRequest(
