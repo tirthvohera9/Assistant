@@ -4,12 +4,28 @@ import { generateEmbedding } from '../services/embeddings.js';
 import { sendTextMessage, sendInteractiveButtons, answerCallbackQuery, downloadTelegramFile } from '../services/telegram.js';
 import { formatReminderTime } from '../utils/time.js';
 
+const processedUpdates = new Set();
+
 export async function receiveWebhook(request, env, ctx) {
   let body;
   try {
     body = await request.json();
   } catch {
     return new Response('Bad Request', { status: 400 });
+  }
+
+  // Deduplicate by update_id to prevent double processing
+  const updateId = body?.update_id;
+  if (updateId) {
+    if (processedUpdates.has(updateId)) {
+      return new Response('OK', { status: 200 });
+    }
+    processedUpdates.add(updateId);
+    // Keep set small
+    if (processedUpdates.size > 100) {
+      const first = processedUpdates.values().next().value;
+      processedUpdates.delete(first);
+    }
   }
 
   // Use ctx.waitUntil so Cloudflare keeps the worker alive for background processing
