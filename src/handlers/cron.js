@@ -1,6 +1,6 @@
 import { getDueReminders, updateReminderStatus, getAllUsers, getUserRemindersToday, getActiveNotesToday, getTopEntities, getSentUnacknowledgedReminders, markReminderSent, createNextRecurrence } from '../services/supabase.js';
 import { sendTextMessage, sendInteractiveButtons } from '../services/telegram.js';
-import { composeBriefing } from '../services/groq.js';
+import { composeBriefing } from '../services/openrouter.js';
 
 export async function checkReminders(request, env) {
   try {

@@ -1,5 +1,6 @@
 import { saveEpisode, updateEpisode, getUserRules, saveNote, upsertEntities, saveReminder, searchNotes, searchReminders, listNotes, markNoteDone, markReminderDone, snoozeReminder, snoozeLatestReminder, cancelReminder, saveUserRule, getEntity, getNotesByEntity, upsertUser, updateNoteContent, deleteNote, deleteAllNotes, updateNotePin, getNoteById, getUser, updateUserContext, updateUserTimezone, getAllTopics, listNotesByTopic, markAllRemindersDone } from '../services/supabase.js';
-import { transcribeAudio, extractTextFromMedia, getLLMResponse, summarizeEntity, composeBriefing } from '../services/groq.js';
+import { transcribeAudio, extractTextFromMedia } from '../services/groq.js';
+import { getLLMResponse, summarizeEntity, composeBriefing } from '../services/openrouter.js';
 import { generateEmbedding } from '../services/embeddings.js';
 import { sendTextMessage, sendInteractiveButtons, sendConfirmButtons, answerCallbackQuery, downloadTelegramFile } from '../services/telegram.js';
 import { formatReminderTime, parseSnoozeDuration, getTomorrowAt9AM, getOneHourFromNow } from '../utils/time.js';
