@@ -76,8 +76,10 @@ export async function getLLMResponse(env, userMessage, userRules) {
 
 {
   "intent": "save_note|set_reminder|search_notes|show_list|mark_done|edit_note|delete_note|delete_reminder|snooze|update_rule|query_entity|answer_question|unclear",
-  "note_content": "cleaned note text if saving or new content if editing",
-  "edit_search_query": "what to search for to find the note/reminder to edit, delete, or cancel",
+  "note_content": "cleaned note text when SAVING a note only",
+  "new_content": "replacement text when EDITING a note (e.g. 'watch tennis' when user says 'edit note 1 to watch tennis')",
+  "edit_search_query": "keywords to find the existing note/reminder to edit, delete, or cancel — use original content keywords, NOT the new content",
+  "note_number": null,
   "reminder_time_iso": "ISO8601 datetime if reminder, else null",
   "reminder_message": "reminder text if applicable",
   "search_query": "query string if searching notes",
@@ -93,6 +95,14 @@ export async function getLLMResponse(env, userMessage, userRules) {
   "tags": ["array of relevant tags"],
   "reply_message": "brief confirmation message to send user"
 }
+
+IMPORTANT RULES:
+- "delete all notes", "clear all notes", "remove all notes" → intent: delete_note, delete_all: true
+- "edit note 1 to X" → intent: edit_note, note_number: 1, new_content: "X", edit_search_query: null
+- "edit note 2 to X" → intent: edit_note, note_number: 2, new_content: "X"
+- "delete note 1" → intent: delete_note, note_number: 1
+- For edits: new_content = the replacement text, edit_search_query = keywords of the ORIGINAL note to find it
+- note_number: set to integer (1, 2, 3...) when user refers to a note by its list position
 
 Current datetime: ${now}
 User timezone: Asia/Kolkata

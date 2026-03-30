@@ -228,29 +228,15 @@ export async function markNoteDone(env, noteId) {
 }
 
 export async function updateNoteContent(env, noteId, newContent, embedding) {
-  try {
-    const payload = {
-      content: newContent,
-      updated_at: new Date().toISOString()
-    };
-    if (embedding) {
-      payload.embedding = JSON.stringify(embedding);
-    }
-    await supabaseRequest(env, 'PATCH', `/notes?id=eq.${noteId}`, payload);
-  } catch (err) {
-    console.error('updateNoteContent error:', err);
+  const payload = { content: newContent };
+  if (embedding) {
+    payload.embedding = JSON.stringify(embedding);
   }
+  await supabaseRequest(env, 'PATCH', `/notes?id=eq.${noteId}`, payload);
 }
 
 export async function deleteNote(env, noteId) {
-  try {
-    await supabaseRequest(env, 'PATCH', `/notes?id=eq.${noteId}`, {
-      status: 'archived',
-      updated_at: new Date().toISOString()
-    });
-  } catch (err) {
-    console.error('deleteNote error:', err);
-  }
+  await supabaseRequest(env, 'PATCH', `/notes?id=eq.${noteId}`, { status: 'archived' });
 }
 
 export async function deleteAllNotes(env, userPhone) {

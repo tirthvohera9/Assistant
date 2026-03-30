@@ -24,6 +24,8 @@ export function parseIntent(llmResponse) {
   return {
     intent,
     note_content: llmResponse.note_content || null,
+    new_content: llmResponse.new_content || null,
+    note_number: typeof llmResponse.note_number === 'number' ? Math.round(llmResponse.note_number) : null,
     reminder_time_iso: llmResponse.reminder_time_iso || null,
     reminder_message: llmResponse.reminder_message || null,
     search_query: llmResponse.search_query || null,

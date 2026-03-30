@@ -48,6 +48,28 @@ export async function sendInteractiveButtons(env, chatId, message, reminderId) {
   return response.json();
 }
 
+export async function sendConfirmButtons(env, chatId, message, confirmData, cancelData) {
+  const response = await fetch(api(env.TELEGRAM_BOT_TOKEN, 'sendMessage'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: message,
+      reply_markup: {
+        inline_keyboard: [[
+          { text: 'Yes, delete all', callback_data: confirmData },
+          { text: 'Cancel', callback_data: cancelData }
+        ]]
+      }
+    })
+  });
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Telegram sendConfirmButtons failed: ${err}`);
+  }
+  return response.json();
+}
+
 export async function answerCallbackQuery(env, callbackQueryId) {
   await fetch(api(env.TELEGRAM_BOT_TOKEN, 'answerCallbackQuery'), {
     method: 'POST',

@@ -1,7 +1,7 @@
 import { saveEpisode, updateEpisode, getUserRules, saveNote, upsertEntities, saveReminder, searchNotes, searchReminders, listNotes, markNoteDone, markReminderDone, snoozeReminder, snoozeLatestReminder, cancelReminder, saveUserRule, getEntity, getNotesByEntity, upsertUser, updateNoteContent, deleteNote, deleteAllNotes } from '../services/supabase.js';
 import { transcribeAudio, extractTextFromMedia, getLLMResponse, summarizeEntity } from '../services/groq.js';
 import { generateEmbedding } from '../services/embeddings.js';
-import { sendTextMessage, sendInteractiveButtons, answerCallbackQuery, downloadTelegramFile } from '../services/telegram.js';
+import { sendTextMessage, sendInteractiveButtons, sendConfirmButtons, answerCallbackQuery, downloadTelegramFile } from '../services/telegram.js';
 import { formatReminderTime, parseSnoozeDuration, getTomorrowAt9AM, getOneHourFromNow } from '../utils/time.js';
 import { parseIntent } from '../utils/intent.js';
 
@@ -165,6 +165,13 @@ async function handleCallbackQuery(callbackQuery, env) {
         snoozeReminder(env, reminderId, getTomorrowAt9AM()),
         sendTextMessage(env, chatId, 'Snoozed until tomorrow at 9 AM.')
       ]);
+    } else if (data === 'confirm_delete_all') {
+      await Promise.all([
+        deleteAllNotes(env, chatId),
+        sendTextMessage(env, chatId, 'All notes deleted.')
+      ]);
+    } else if (data === 'cancel_delete_all') {
+      await sendTextMessage(env, chatId, 'Cancelled. Your notes are safe.');
     }
   } catch (err) {
     console.error('handleCallbackQuery error:', err);
@@ -394,62 +401,81 @@ async function handleUpdateRule(env, chatId, intentData) {
 }
 
 async function handleEditNote(env, chatId, intentData) {
-  const searchQuery = intentData.edit_search_query || intentData.note_content || '';
-  const newContent = intentData.note_content || '';
+  const newContent = intentData.new_content || intentData.note_content || '';
+  const searchQuery = intentData.edit_search_query || '';
+  const noteNumber = intentData.note_number;
 
-  if (!searchQuery || !newContent) {
-    await sendTextMessage(env, chatId, 'Please specify which note to edit and the new content.');
+  if (!newContent) {
+    await sendTextMessage(env, chatId, 'What should the note say after editing?');
     return;
   }
 
-  // Search first — don't send false success
-  const queryEmbedding = await generateEmbedding(env, searchQuery);
-  const results = await searchNotes(env, chatId, searchQuery, queryEmbedding);
+  let targetNote = null;
 
-  if (!results || results.length === 0) {
-    await sendTextMessage(env, chatId, `Couldn't find a note matching "${searchQuery}".`);
+  if (noteNumber && noteNumber > 0) {
+    // User said "note 1", "note 2" etc — fetch by position
+    const notes = await listNotes(env, chatId, 'all');
+    targetNote = notes[noteNumber - 1] || null;
+    if (!targetNote) {
+      await sendTextMessage(env, chatId, `There is no note #${noteNumber}.`);
+      return;
+    }
+  } else if (searchQuery) {
+    const queryEmbedding = await generateEmbedding(env, searchQuery);
+    const results = await searchNotes(env, chatId, searchQuery, queryEmbedding);
+    if (!results || results.length === 0) {
+      await sendTextMessage(env, chatId, `Couldn't find a note matching "${searchQuery}".`);
+      return;
+    }
+    targetNote = results[0];
+  } else {
+    await sendTextMessage(env, chatId, 'Please specify which note to edit (e.g. "edit note 1 to...").');
     return;
   }
 
-  // Found — reply and update in parallel
+  // Update first — reply only after success
   const embedding = await generateEmbedding(env, newContent);
-  await Promise.all([
-    sendTextMessage(env, chatId, intentData.reply_message || 'Note updated!'),
-    updateNoteContent(env, results[0].id, newContent, embedding)
-  ]);
+  await updateNoteContent(env, targetNote.id, newContent, embedding);
+  await sendTextMessage(env, chatId, intentData.reply_message || 'Note updated!');
 }
 
 async function handleDeleteNote(env, chatId, intentData) {
   const deleteAll = intentData.delete_all === true;
-  const searchQuery = intentData.edit_search_query || intentData.note_content || '';
+  const searchQuery = intentData.edit_search_query || '';
+  const noteNumber = intentData.note_number;
 
   if (deleteAll) {
-    await Promise.all([
-      deleteAllNotes(env, chatId),
-      sendTextMessage(env, chatId, intentData.reply_message || 'All notes deleted.')
-    ]);
+    // Ask for confirmation before deleting everything
+    await sendConfirmButtons(env, chatId, 'Are you sure you want to delete ALL notes? This cannot be undone.', 'confirm_delete_all', 'cancel_delete_all');
     return;
   }
 
-  if (!searchQuery) {
+  let targetNote = null;
+
+  if (noteNumber && noteNumber > 0) {
+    // User said "delete note 1" etc — fetch by position
+    const notes = await listNotes(env, chatId, 'all');
+    targetNote = notes[noteNumber - 1] || null;
+    if (!targetNote) {
+      await sendTextMessage(env, chatId, `There is no note #${noteNumber}.`);
+      return;
+    }
+  } else if (searchQuery) {
+    const queryEmbedding = await generateEmbedding(env, searchQuery);
+    const results = await searchNotes(env, chatId, searchQuery, queryEmbedding);
+    if (!results || results.length === 0) {
+      await sendTextMessage(env, chatId, `Couldn't find a note matching "${searchQuery}".`);
+      return;
+    }
+    targetNote = results[0];
+  } else {
     await sendTextMessage(env, chatId, 'Please specify which note to delete.');
     return;
   }
 
-  // Search first — don't send false success
-  const queryEmbedding = await generateEmbedding(env, searchQuery);
-  const results = await searchNotes(env, chatId, searchQuery, queryEmbedding);
-
-  if (!results || results.length === 0) {
-    await sendTextMessage(env, chatId, `Couldn't find a note matching "${searchQuery}".`);
-    return;
-  }
-
-  // Found — reply and soft-delete in parallel
-  await Promise.all([
-    sendTextMessage(env, chatId, intentData.reply_message || 'Note deleted.'),
-    deleteNote(env, results[0].id)
-  ]);
+  // Delete first — reply only after success
+  await deleteNote(env, targetNote.id);
+  await sendTextMessage(env, chatId, intentData.reply_message || 'Note deleted.');
 }
 
 async function handleDeleteReminder(env, chatId, intentData) {
