@@ -83,6 +83,32 @@ function extractJSON(text) {
   return null;
 }
 
+async function groqFallback(env, messages) {
+  try {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${env.GROQ_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages,
+        temperature: 0.2,
+        max_tokens: 1024,
+        response_format: { type: 'json_object' }
+      })
+    });
+    if (!response.ok) throw new Error(`Groq fallback failed: ${response.status}`);
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || '{}';
+    return JSON.parse(content);
+  } catch (err) {
+    console.error('Groq fallback also failed:', err);
+    return { intent: 'unclear', reply_message: "I'm not sure what you meant. Please try again." };
+  }
+}
+
 export async function getLLMResponse(env, userMessage, userRules, context = [], userTimezone = 'Asia/Kolkata') {
   const now = new Date().toISOString();
   const rulesText = userRules && userRules.length > 0
@@ -154,8 +180,9 @@ User rules: ${rulesText}`;
     if (!parsed) throw new Error(`Could not parse JSON from: ${content.substring(0, 100)}`);
     return parsed;
   } catch (err) {
-    console.error('OpenRouter LLM error:', err);
-    return { intent: 'unclear', reply_message: "I'm not sure what you meant. Please try again." };
+    console.warn('OpenRouter failed, falling back to Groq:', err.message);
+    // Hard fallback to Groq — guaranteed to work
+    return groqFallback(env, messages);
   }
 }
 
