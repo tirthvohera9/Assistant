@@ -1,13 +1,18 @@
 const OPENROUTER_API_BASE = 'https://openrouter.ai/api/v1';
 
-// Available free models on OpenRouter (set OPENROUTER_MODEL in env to override):
-// meta-llama/llama-3.3-70b-instruct:free  — default, same as Groq backend
-// nousresearch/hermes-3-llama-3.1-405b:free — very large, slower
-// openai/gpt-oss-120b:free
-// google/gemma-3-27b-it:free
+// Fallback chain — tried in order if previous is rate-limited (429)
+const FALLBACK_MODELS = [
+  'meta-llama/llama-3.3-70b-instruct:free',
+  'nousresearch/hermes-3-llama-3.1-405b:free',
+  'openai/gpt-oss-120b:free',
+  'nvidia/nemotron-3-super-120b-a12b:free',
+  'google/gemma-3-27b-it:free'
+];
 
-function getModel(env) {
-  return env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free';
+function getModelChain(env) {
+  const primary = env.OPENROUTER_MODEL || FALLBACK_MODELS[0];
+  // Put primary first, then the rest of fallbacks (excluding primary to avoid dupes)
+  return [primary, ...FALLBACK_MODELS.filter(m => m !== primary)];
 }
 
 function getHeaders(env) {
@@ -20,25 +25,50 @@ function getHeaders(env) {
 }
 
 async function chatCompletion(env, messages, options = {}) {
-  const response = await fetch(`${OPENROUTER_API_BASE}/chat/completions`, {
-    method: 'POST',
-    headers: getHeaders(env),
-    body: JSON.stringify({
-      model: getModel(env),
-      messages,
-      temperature: options.temperature ?? 0.2,
-      max_tokens: options.max_tokens ?? 1024
-      // Note: response_format not used — not supported by all free models
-    })
-  });
+  const models = getModelChain(env);
+  let lastError;
 
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`OpenRouter error [${response.status}]: ${err}`);
+  for (const model of models) {
+    try {
+      const response = await fetch(`${OPENROUTER_API_BASE}/chat/completions`, {
+        method: 'POST',
+        headers: getHeaders(env),
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature: options.temperature ?? 0.2,
+          max_tokens: options.max_tokens ?? 1024
+        })
+      });
+
+      if (response.status === 429 || response.status === 503) {
+        const err = await response.text();
+        console.warn(`Model ${model} rate-limited, trying next. Error: ${err}`);
+        lastError = new Error(`Rate limited: ${model}`);
+        continue; // try next model
+      }
+
+      if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`OpenRouter error [${response.status}] for ${model}: ${err}`);
+      }
+
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content?.trim() || '';
+      if (content) {
+        if (model !== models[0]) console.log(`Used fallback model: ${model}`);
+        return content;
+      }
+    } catch (err) {
+      if (err.message.startsWith('Rate limited:')) {
+        lastError = err;
+        continue;
+      }
+      throw err;
+    }
   }
 
-  const data = await response.json();
-  return data.choices?.[0]?.message?.content?.trim() || '';
+  throw lastError || new Error('All models failed');
 }
 
 function extractJSON(text) {
