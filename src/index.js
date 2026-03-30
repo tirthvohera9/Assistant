@@ -32,6 +32,43 @@ export default {
         return sendBriefings(request, env);
       }
 
+      // Diagnostic: test OpenRouter connection
+      if (path === '/test-openrouter' && method === 'GET') {
+        try {
+          const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
+              'Content-Type': 'application/json',
+              'HTTP-Referer': 'https://chief-assistant.workers.dev',
+              'X-Title': 'Chief'
+            },
+            body: JSON.stringify({
+              model: env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-exp:free',
+              messages: [{ role: 'user', content: 'Say "OK" in one word.' }],
+              max_tokens: 10
+            })
+          });
+          const text = await response.text();
+          return new Response(JSON.stringify({
+            status: response.status,
+            ok: response.ok,
+            key_present: !!env.OPENROUTER_API_KEY,
+            key_prefix: env.OPENROUTER_API_KEY ? env.OPENROUTER_API_KEY.substring(0, 8) + '...' : 'MISSING',
+            model: env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-exp:free',
+            response: text
+          }, null, 2), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        } catch (err) {
+          return new Response(JSON.stringify({ error: err.message, stack: err.stack }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+      }
+
       if (path === '/' || path === '/webhook') {
         return new Response('Chief is running.', { status: 200 });
       }
