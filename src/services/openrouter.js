@@ -182,7 +182,7 @@ User rules: ${rulesText}`;
   } catch (err) {
     console.warn('OpenRouter failed, falling back to Groq:', err.message);
     // Hard fallback to Groq — guaranteed to work
-    return groqFallback(env, messages);
+    return await groqFallback(env, messages);
   }
 }
 

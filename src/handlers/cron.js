@@ -25,7 +25,7 @@ export async function checkReminders(request, env) {
     for (const reminder of unacknowledged) {
       try {
         await sendInteractiveButtons(env, reminder.user_phone, `🔔 Reminder (follow-up): ${reminder.message}`, reminder.id);
-        // Reset sent_at so we don't keep spamming — mark as pending so it won't re-trigger
+        // Mark done so it won't be re-sent again
         await updateReminderStatus(env, reminder.id, 'done');
       } catch (err) {
         console.error(`Failed to re-send reminder ${reminder.id}:`, err);

@@ -1,4 +1,4 @@
-import { saveEpisode, updateEpisode, getUserRules, saveNote, upsertEntities, saveReminder, searchNotes, searchReminders, listNotes, markNoteDone, markReminderDone, snoozeReminder, snoozeLatestReminder, cancelReminder, saveUserRule, getEntity, getNotesByEntity, upsertUser, updateNoteContent, deleteNote, deleteAllNotes, updateNotePin, getNoteById, getUser, updateUserContext, updateUserTimezone, getAllTopics, listNotesByTopic, markAllRemindersDone } from '../services/supabase.js';
+import { saveEpisode, updateEpisode, getUserRules, saveNote, upsertEntities, saveReminder, searchNotes, searchReminders, listNotes, markNoteDone, markReminderDone, snoozeReminder, snoozeLatestReminder, cancelReminder, saveUserRule, getNotesByEntity, upsertUser, updateNoteContent, deleteNote, deleteAllNotes, updateNotePin, getNoteById, getUser, updateUserContext, updateUserTimezone, getAllTopics, listNotesByTopic, markAllRemindersDone, getUserRemindersToday, getActiveNotesToday, getTopEntities } from '../services/supabase.js';
 import { transcribeAudio, extractTextFromMedia } from '../services/groq.js';
 import { getLLMResponse, summarizeEntity, composeBriefing } from '../services/openrouter.js';
 import { generateEmbedding } from '../services/embeddings.js';
@@ -764,8 +764,6 @@ async function handleBulkAction(env, chatId, intentData) {
 
 // Feature 11: On-demand briefing
 async function handleOnDemandBriefing(env, chatId) {
-  const { getUserRemindersToday, getActiveNotesToday, getTopEntities } = await import('../services/supabase.js');
-
   const [todaysReminders, activeNotes, topEntities] = await Promise.all([
     getUserRemindersToday(env, chatId),
     getActiveNotesToday(env, chatId),
@@ -784,7 +782,6 @@ async function handleOnDemandBriefing(env, chatId) {
 
 // Helper for custom inline keyboard buttons
 async function sendInteractiveButtonsGeneric(env, chatId, message, buttons) {
-  const { sendTextMessage: send } = await import('../services/telegram.js');
   const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
