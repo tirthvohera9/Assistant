@@ -32,37 +32,29 @@ export default {
         return sendBriefings(request, env);
       }
 
-      // Diagnostic: test OpenRouter connection
+      // Diagnostic: list available free models on this account
       if (path === '/test-openrouter' && method === 'GET') {
         try {
-          const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
-              'Content-Type': 'application/json',
-              'HTTP-Referer': 'https://chief-assistant.workers.dev',
-              'X-Title': 'Chief'
-            },
-            body: JSON.stringify({
-              model: env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-exp:free',
-              messages: [{ role: 'user', content: 'Say "OK" in one word.' }],
-              max_tokens: 10
-            })
+          const modelsRes = await fetch('https://openrouter.ai/api/v1/models', {
+            headers: { 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}` }
           });
-          const text = await response.text();
+          const modelsData = await modelsRes.json();
+          const freeModels = (modelsData.data || [])
+            .filter(m => m.id && (m.id.endsWith(':free') || (m.pricing && m.pricing.prompt === '0')))
+            .map(m => m.id)
+            .sort();
+
           return new Response(JSON.stringify({
-            status: response.status,
-            ok: response.ok,
             key_present: !!env.OPENROUTER_API_KEY,
-            key_prefix: env.OPENROUTER_API_KEY ? env.OPENROUTER_API_KEY.substring(0, 8) + '...' : 'MISSING',
-            model: env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-exp:free',
-            response: text
+            key_prefix: env.OPENROUTER_API_KEY ? env.OPENROUTER_API_KEY.substring(0, 10) + '...' : 'MISSING',
+            current_model: env.OPENROUTER_MODEL || 'deepseek/deepseek-chat:free',
+            free_models_available: freeModels
           }, null, 2), {
             status: 200,
             headers: { 'Content-Type': 'application/json' }
           });
         } catch (err) {
-          return new Response(JSON.stringify({ error: err.message, stack: err.stack }), {
+          return new Response(JSON.stringify({ error: err.message }), {
             status: 500,
             headers: { 'Content-Type': 'application/json' }
           });
