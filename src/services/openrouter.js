@@ -27,18 +27,30 @@ async function chatCompletion(env, messages, options = {}) {
       model: getModel(env),
       messages,
       temperature: options.temperature ?? 0.2,
-      max_tokens: options.max_tokens ?? 1024,
-      ...(options.json_mode ? { response_format: { type: 'json_object' } } : {})
+      max_tokens: options.max_tokens ?? 1024
+      // Note: response_format not used — not supported by all free models
     })
   });
 
   if (!response.ok) {
     const err = await response.text();
-    throw new Error(`OpenRouter error: ${err}`);
+    throw new Error(`OpenRouter error [${response.status}]: ${err}`);
   }
 
   const data = await response.json();
   return data.choices?.[0]?.message?.content?.trim() || '';
+}
+
+function extractJSON(text) {
+  // Try direct parse first
+  try { return JSON.parse(text); } catch {}
+  // Extract JSON from markdown code block
+  const block = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (block) try { return JSON.parse(block[1].trim()); } catch {}
+  // Extract first {...} block
+  const brace = text.match(/\{[\s\S]*\}/);
+  if (brace) try { return JSON.parse(brace[0]); } catch {}
+  return null;
 }
 
 export async function getLLMResponse(env, userMessage, userRules, context = [], userTimezone = 'Asia/Kolkata') {
@@ -47,7 +59,7 @@ export async function getLLMResponse(env, userMessage, userRules, context = [], 
     ? userRules.map(r => r.rule_text).join('\n')
     : 'None';
 
-  const systemPrompt = `You are Chief, a personal AI assistant. Analyze the user message and return ONLY valid JSON.
+  const systemPrompt = `You are Chief, a personal AI assistant. You MUST respond with ONLY a valid JSON object — no markdown, no explanation, no code blocks, just raw JSON.
 
 {
   "intent": "save_note|save_checklist|set_reminder|search_notes|show_list|show_topics|mark_done|edit_note|delete_note|delete_reminder|snooze|update_rule|query_entity|answer_question|pin_note|export_notes|set_timezone|bulk_action|unclear",
@@ -107,8 +119,10 @@ User rules: ${rulesText}`;
   messages.push({ role: 'user', content: userMessage });
 
   try {
-    const content = await chatCompletion(env, messages, { temperature: 0.2, max_tokens: 1024, json_mode: true });
-    return JSON.parse(content);
+    const content = await chatCompletion(env, messages, { temperature: 0.2, max_tokens: 1024 });
+    const parsed = extractJSON(content);
+    if (!parsed) throw new Error(`Could not parse JSON from: ${content.substring(0, 100)}`);
+    return parsed;
   } catch (err) {
     console.error('OpenRouter LLM error:', err);
     return { intent: 'unclear', reply_message: "I'm not sure what you meant. Please try again." };
