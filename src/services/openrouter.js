@@ -1,13 +1,13 @@
 const OPENROUTER_API_BASE = 'https://openrouter.ai/api/v1';
 
 // Recommended free models (set OPENROUTER_MODEL in your env to override):
-// google/gemini-2.0-flash-exp:free  — fast, very capable (default)
-// deepseek/deepseek-chat:free        — excellent reasoning
-// meta-llama/llama-3.3-70b-instruct:free — same family as Groq
-// qwen/qwen2.5-72b-instruct:free
+// deepseek/deepseek-chat:free              — best reasoning (default)
+// meta-llama/llama-3.3-70b-instruct:free  — very capable
+// google/gemini-2.0-flash-thinking-exp:free
+// microsoft/phi-4:free
 
 function getModel(env) {
-  return env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-exp:free';
+  return env.OPENROUTER_MODEL || 'deepseek/deepseek-chat:free';
 }
 
 function getHeaders(env) {
