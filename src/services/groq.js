@@ -66,7 +66,7 @@ export async function extractTextFromMedia(env, mediaBuffer, mediaType) {
   return data.choices?.[0]?.message?.content?.trim() || '';
 }
 
-export async function getLLMResponse(env, userMessage, userRules) {
+export async function getLLMResponse(env, userMessage, userRules, context = [], userTimezone = 'Asia/Kolkata') {
   const now = new Date().toISOString();
   const rulesText = userRules && userRules.length > 0
     ? userRules.map(r => r.rule_text).join('\n')
@@ -75,38 +75,63 @@ export async function getLLMResponse(env, userMessage, userRules) {
   const systemPrompt = `You are Chief, a personal AI assistant. Analyze the user message and return ONLY valid JSON.
 
 {
-  "intent": "save_note|set_reminder|search_notes|show_list|mark_done|edit_note|delete_note|delete_reminder|snooze|update_rule|query_entity|answer_question|unclear",
+  "intent": "save_note|save_checklist|set_reminder|search_notes|show_list|show_topics|mark_done|edit_note|delete_note|delete_reminder|snooze|update_rule|query_entity|answer_question|pin_note|export_notes|set_timezone|bulk_action|unclear",
   "note_content": "cleaned note text when SAVING a note only",
-  "new_content": "replacement text when EDITING a note (e.g. 'watch tennis' when user says 'edit note 1 to watch tennis')",
-  "edit_search_query": "keywords to find the existing note/reminder to edit, delete, or cancel — use original content keywords, NOT the new content",
+  "new_content": "replacement text when EDITING a note",
+  "edit_search_query": "keywords to find the existing note/reminder to edit, delete, or cancel",
   "note_number": null,
   "reminder_time_iso": "ISO8601 datetime if reminder, else null",
   "reminder_message": "reminder text if applicable",
+  "recurrence": "none|daily|weekly|monthly",
   "search_query": "query string if searching notes",
   "entity_query": "person or project name if querying entity",
-  "list_filter": "all|today|week|people|projects",
+  "list_filter": "all|today|week",
+  "topic_filter": "topic name if user wants notes by topic, else null",
   "snooze_duration": "1h|tomorrow|null",
-  "snooze_search_query": "keywords to find the specific reminder to snooze, if mentioned",
+  "snooze_search_query": "keywords to find the specific reminder to snooze",
   "rule_text": "rule to save if updating rule",
   "delete_all": false,
   "people": ["array of people mentioned"],
   "projects": ["array of projects mentioned"],
   "topics": ["array of topics mentioned"],
   "tags": ["array of relevant tags"],
-  "reply_message": "brief confirmation message to send user"
+  "reply_message": "brief confirmation message to send user",
+  "checklist_items": ["item1", "item2"],
+  "timezone_value": "IANA timezone string if user is setting timezone, else null",
+  "bulk_target": "reminders_today|null",
+  "smart_reminder_time": "ISO8601 datetime if note contains a future date/event, else null",
+  "pin": false
 }
 
 IMPORTANT RULES:
 - "delete all notes", "clear all notes", "remove all notes" → intent: delete_note, delete_all: true
 - "edit note 1 to X" → intent: edit_note, note_number: 1, new_content: "X", edit_search_query: null
-- "edit note 2 to X" → intent: edit_note, note_number: 2, new_content: "X"
 - "delete note 1" → intent: delete_note, note_number: 1
-- For edits: new_content = the replacement text, edit_search_query = keywords of the ORIGINAL note to find it
+- "pin note 1" or "pin my note about X" → intent: pin_note, note_number: 1 or edit_search_query: "X", pin: true
+- "unpin note 1" → intent: pin_note, note_number: 1, pin: false
+- "make a checklist: milk, eggs" → intent: save_checklist, checklist_items: ["milk", "eggs"]
+- "show topics" or "list my topics" → intent: show_topics
+- "show notes about [topic]" → intent: show_list, topic_filter: "[topic]"
+- "export my notes" or "send me all notes" → intent: export_notes
+- "my timezone is X" or "I'm in X timezone" → intent: set_timezone, timezone_value: "X"
+- "remind me every day/week/month" → set_reminder with recurrence: "daily"/"weekly"/"monthly"
+- "mark all reminders done" or "clear all reminders" → intent: bulk_action, bulk_target: "reminders_today"
+- "daily briefing" or "give me my briefing" → intent: answer_question, reply_message: trigger briefing
+- If a note contains a specific future date/time, set smart_reminder_time to that ISO datetime
+- Use conversation history below to resolve "yes", "that one", "it", "both", etc.
 - note_number: set to integer (1, 2, 3...) when user refers to a note by its list position
+- For edits: new_content = the replacement text, edit_search_query = keywords of the ORIGINAL note
 
 Current datetime: ${now}
-User timezone: Asia/Kolkata
+User timezone: ${userTimezone}
 User rules: ${rulesText}`;
+
+  // Build messages array with conversation context
+  const messages = [{ role: 'system', content: systemPrompt }];
+  if (Array.isArray(context) && context.length > 0) {
+    messages.push(...context.slice(-8)); // last 4 turns (user+assistant pairs)
+  }
+  messages.push({ role: 'user', content: userMessage });
 
   const response = await fetch(`${GROQ_API_BASE}/chat/completions`, {
     method: 'POST',
@@ -116,10 +141,7 @@ User rules: ${rulesText}`;
     },
     body: JSON.stringify({
       model: 'llama-3.3-70b-versatile',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage }
-      ],
+      messages,
       temperature: 0.2,
       max_tokens: 1024,
       response_format: { type: 'json_object' }

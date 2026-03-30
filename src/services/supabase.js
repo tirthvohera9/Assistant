@@ -137,7 +137,8 @@ export async function saveReminder(env, data) {
       user_phone: data.user_phone,
       message: data.message,
       due_at: data.due_at,
-      status: 'pending'
+      status: 'pending',
+      recurrence: data.recurrence || 'none'
     };
 
     if (data.note_id) {
@@ -193,7 +194,7 @@ export async function searchNotes(env, userPhone, query, queryEmbedding) {
 
 export async function listNotes(env, userPhone, filter = 'all') {
   try {
-    let queryParams = `user_phone=eq.${encodeURIComponent(userPhone)}&status=eq.active&order=created_at.desc`;
+    let queryParams = `user_phone=eq.${encodeURIComponent(userPhone)}&status=eq.active&order=pinned.desc,created_at.desc`;
 
     if (filter === 'today') {
       const today = new Date();
@@ -237,6 +238,20 @@ export async function updateNoteContent(env, noteId, newContent, embedding) {
 
 export async function deleteNote(env, noteId) {
   await supabaseRequest(env, 'PATCH', `/notes?id=eq.${noteId}`, { status: 'archived' });
+}
+
+export async function updateNotePin(env, noteId, pinned) {
+  await supabaseRequest(env, 'PATCH', `/notes?id=eq.${noteId}`, { pinned });
+}
+
+export async function getNoteById(env, noteId) {
+  try {
+    const result = await supabaseRequest(env, 'GET', `/notes?id=eq.${noteId}&limit=1`);
+    return result?.[0] || null;
+  } catch (err) {
+    console.error('getNoteById error:', err);
+    return null;
+  }
 }
 
 export async function deleteAllNotes(env, userPhone) {
@@ -398,6 +413,135 @@ export async function getAllUsers(env) {
   } catch (err) {
     console.error('getAllUsers error:', err);
     return [];
+  }
+}
+
+export async function getUser(env, userPhone) {
+  try {
+    const result = await supabaseRequest(env, 'GET', `/users?phone=eq.${encodeURIComponent(userPhone)}&limit=1`);
+    return result?.[0] || null;
+  } catch (err) {
+    console.error('getUser error:', err);
+    return null;
+  }
+}
+
+export async function updateUserContext(env, userPhone, context) {
+  try {
+    await supabaseRequest(env, 'PATCH', `/users?phone=eq.${encodeURIComponent(userPhone)}`, {
+      context: context
+    });
+  } catch (err) {
+    console.error('updateUserContext error:', err);
+  }
+}
+
+export async function updateUserTimezone(env, userPhone, timezone) {
+  try {
+    await supabaseRequest(env, 'PATCH', `/users?phone=eq.${encodeURIComponent(userPhone)}`, {
+      timezone
+    });
+  } catch (err) {
+    console.error('updateUserTimezone error:', err);
+  }
+}
+
+export async function getAllTopics(env, userPhone) {
+  try {
+    const result = await supabaseRequest(env, 'GET', `/notes?user_phone=eq.${encodeURIComponent(userPhone)}&status=eq.active&select=topics&limit=200`);
+    if (!Array.isArray(result)) return [];
+    const topicSet = new Set();
+    result.forEach(note => {
+      if (Array.isArray(note.topics)) {
+        note.topics.forEach(t => t && topicSet.add(t));
+      }
+    });
+    return Array.from(topicSet).sort();
+  } catch (err) {
+    console.error('getAllTopics error:', err);
+    return [];
+  }
+}
+
+export async function listNotesByTopic(env, userPhone, topic) {
+  try {
+    const encoded = encodeURIComponent(topic);
+    const result = await supabaseRequest(
+      env,
+      'GET',
+      `/notes?user_phone=eq.${encodeURIComponent(userPhone)}&topics=cs.{${encoded}}&status=eq.active&order=created_at.desc&limit=20`
+    );
+    return result || [];
+  } catch (err) {
+    console.error('listNotesByTopic error:', err);
+    return [];
+  }
+}
+
+export async function getSentUnacknowledgedReminders(env) {
+  try {
+    const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const result = await supabaseRequest(
+      env,
+      'GET',
+      `/reminders?status=eq.sent&sent_at=lte.${cutoff}&order=due_at.asc&limit=50`
+    );
+    return result || [];
+  } catch (err) {
+    console.error('getSentUnacknowledgedReminders error:', err);
+    return [];
+  }
+}
+
+export async function markReminderSent(env, reminderId) {
+  try {
+    await supabaseRequest(env, 'PATCH', `/reminders?id=eq.${reminderId}`, {
+      status: 'sent',
+      sent_at: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('markReminderSent error:', err);
+  }
+}
+
+export async function createNextRecurrence(env, reminder) {
+  try {
+    const due = new Date(reminder.due_at);
+    let nextDue;
+    switch (reminder.recurrence) {
+      case 'daily':
+        nextDue = new Date(due.getTime() + 24 * 60 * 60 * 1000);
+        break;
+      case 'weekly':
+        nextDue = new Date(due.getTime() + 7 * 24 * 60 * 60 * 1000);
+        break;
+      case 'monthly':
+        nextDue = new Date(due);
+        nextDue.setMonth(nextDue.getMonth() + 1);
+        break;
+      default:
+        return;
+    }
+    await supabaseRequest(env, 'POST', '/reminders', {
+      user_phone: reminder.user_phone,
+      message: reminder.message,
+      due_at: nextDue.toISOString(),
+      status: 'pending',
+      recurrence: reminder.recurrence,
+      note_id: reminder.note_id || null
+    });
+  } catch (err) {
+    console.error('createNextRecurrence error:', err);
+  }
+}
+
+export async function markAllRemindersDone(env, userPhone) {
+  try {
+    await supabaseRequest(env, 'PATCH', `/reminders?user_phone=eq.${encodeURIComponent(userPhone)}&status=eq.pending`, {
+      status: 'done'
+    });
+  } catch (err) {
+    console.error('markAllRemindersDone error:', err);
   }
 }
 

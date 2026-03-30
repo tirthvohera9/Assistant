@@ -1,21 +1,41 @@
-import { getDueReminders, updateReminderStatus, getAllUsers, getUserRemindersToday, getActiveNotesToday, getTopEntities } from '../services/supabase.js';
+import { getDueReminders, updateReminderStatus, getAllUsers, getUserRemindersToday, getActiveNotesToday, getTopEntities, getSentUnacknowledgedReminders, markReminderSent, createNextRecurrence } from '../services/supabase.js';
 import { sendTextMessage, sendInteractiveButtons } from '../services/telegram.js';
 import { composeBriefing } from '../services/groq.js';
 
 export async function checkReminders(request, env) {
   try {
+    // Fire due reminders
     const dueReminders = await getDueReminders(env);
-
     for (const reminder of dueReminders) {
       try {
         await sendInteractiveButtons(env, reminder.user_phone, reminder.message, reminder.id);
-        await updateReminderStatus(env, reminder.id, 'sent');
+        await markReminderSent(env, reminder.id);
+
+        // Feature 1: create next occurrence for recurring reminders
+        if (reminder.recurrence && reminder.recurrence !== 'none') {
+          await createNextRecurrence(env, reminder);
+        }
       } catch (err) {
         console.error(`Failed to send reminder ${reminder.id}:`, err);
       }
     }
 
-    return new Response(JSON.stringify({ processed: dueReminders.length }), {
+    // Feature 10: re-send unacknowledged reminders (sent > 30 min ago)
+    const unacknowledged = await getSentUnacknowledgedReminders(env);
+    for (const reminder of unacknowledged) {
+      try {
+        await sendInteractiveButtons(env, reminder.user_phone, `🔔 Reminder (follow-up): ${reminder.message}`, reminder.id);
+        // Reset sent_at so we don't keep spamming — mark as pending so it won't re-trigger
+        await updateReminderStatus(env, reminder.id, 'done');
+      } catch (err) {
+        console.error(`Failed to re-send reminder ${reminder.id}:`, err);
+      }
+    }
+
+    return new Response(JSON.stringify({
+      processed: dueReminders.length,
+      renotified: unacknowledged.length
+    }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' }
     });
