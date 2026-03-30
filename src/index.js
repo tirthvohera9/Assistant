@@ -44,10 +44,30 @@ export default {
             .map(m => m.id)
             .sort();
 
+          // Test the current model with a real call
+          const model = env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free';
+          const testRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
+              'Content-Type': 'application/json',
+              'HTTP-Referer': 'https://chief-assistant.workers.dev',
+              'X-Title': 'Chief'
+            },
+            body: JSON.stringify({
+              model,
+              messages: [{ role: 'user', content: 'Reply with just the word OK.' }],
+              max_tokens: 10
+            })
+          });
+          const testData = await testRes.json();
+          const testReply = testData.choices?.[0]?.message?.content || null;
+          const testError = testData.error || null;
+
           return new Response(JSON.stringify({
             key_present: !!env.OPENROUTER_API_KEY,
-            key_prefix: env.OPENROUTER_API_KEY ? env.OPENROUTER_API_KEY.substring(0, 10) + '...' : 'MISSING',
-            current_model: env.OPENROUTER_MODEL || 'deepseek/deepseek-chat:free',
+            current_model: model,
+            model_test: { status: testRes.status, reply: testReply, error: testError },
             free_models_available: freeModels
           }, null, 2), {
             status: 200,
